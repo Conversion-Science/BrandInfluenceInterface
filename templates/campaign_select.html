@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Campaign</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .campaign-card:hover { transform: translateY(-5px); }
+        .spinner { border-top-color: #3498db; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 flex items-center justify-center">
+    <div class="max-w-4xl w-full">
+        <div class="bg-white rounded-xl shadow-lg p-8">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2 text-center">Select Campaign to Audit</h1>
+            <p class="text-gray-600 text-center mb-8">Choose a campaign to begin the review process</p>
+
+            <div id="campaigns-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {% for campaign in campaigns %}
+<div class="campaign-card bg-white rounded-lg border border-gray-200 p-6 cursor-pointer transition-all duration-300 shadow hover:shadow-md">
+    <h3 class="text-xl font-bold text-gray-800 mb-4">{{ campaign.name }}</h3>
+    <!-- REMOVED DESCRIPTION LINE -->
+    <button class="campaign-option w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+            data-campaign-id="{{ campaign.id }}">
+        Start Audit
+    </button>
+</div>
+{% endfor %}
+            </div>
+
+            <div id="loading-campaigns" class="text-center py-12 {% if campaigns %}hidden{% endif %}">
+                <div class="spinner animate-spin w-12 h-12 border-4 border-gray-300 border-t-blue-500 rounded-full mx-auto"></div>
+                <p class="mt-4 text-gray-600">Loading campaigns...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const campaignButtons = document.querySelectorAll('.campaign-option');
+
+        campaignButtons.forEach(button => {
+            button.addEventListener('click', async () => {
+                const campaignId = button.dataset.campaignId;
+                const buttonText = button.textContent;
+                const originalHTML = button.innerHTML;
+
+                // Show loading state
+                button.innerHTML = `
+                    <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg> Starting Audit...
+                `;
+                button.disabled = true;
+
+                try {
+                    // Start the audit process
+                    const response = await fetch('/start_audit', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ campaign_id: campaignId })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        // Redirect to summary page with campaign ID
+                        window.location.href = data.redirect_url;
+                    } else {
+                        alert(data.error || 'Failed to start audit');
+                        button.innerHTML = originalHTML;
+                        button.disabled = false;
+                    }
+                } catch (error) {
+                    alert('Network error starting audit');
+                    button.innerHTML = originalHTML;
+                    button.disabled = false;
+                }
+            });
+        });
+    });
+</script>
+</body>
+</html>
