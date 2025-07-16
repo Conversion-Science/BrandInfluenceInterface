@@ -42,9 +42,15 @@
                     </svg>
                 </button>
             </div>
-            <button id="back-to-summary-btn" class="py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition duration-300 hidden">
-                ← Back to Summary
-            </button>
+            <div>
+                <!-- Added Back to Summary button -->
+                <button id="back-to-summary-btn" class="py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition duration-300 hidden">
+                    ← Back to Summary
+                </button>
+                <button id="back-to-campaigns-btn" class="py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition duration-300">
+                    ← Back to Campaigns
+                </button>
+            </div>
         </header>
 
         <div id="loading-indicator" class="text-center p-10 hidden">
@@ -54,30 +60,24 @@
 
         <!-- ===== Summary View ===== -->
         <div id="summary-view" class="view active">
-            <button id="back-to-campaigns-btn"
-        class="py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition duration-300">
-    ← Back to Campaigns
-</button>
             {% if campaign_id %}
-<div class="mb-6 bg-blue-50 p-4 rounded-lg border border-blue-200">
-    <h2 class="text-xl font-semibold text-blue-800">Campaign:
-        <span class="font-normal">{{ campaign_name }}</span>
-    </h2>
-</div>
-{% endif %}
-
+            <div class="mb-6 bg-blue-50 p-4 rounded-lg border border-blue-200">
+                <h2 class="text-xl font-semibold text-blue-800">Campaign:
+                    <span class="font-normal">{{ campaign_name }}</span>
+                </h2>
+            </div>
+            {% endif %}
 
             <div id="summary-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-    <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Total Active Influencers</p><p id="total-influencers" class="text-3xl font-bold text-gray-800">{{ summary_data.number_of_influencers }}</p></div>
-    <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Not Uploaded Yet</p><p id="videos-not-uploaded" class="text-3xl font-bold text-yellow-600">{{ summary_data.videos_not_loaded_yet }}</p></div>
-    <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Posts without Issues</p><p id="videos-approved" class="text-3xl font-bold text-green-600">{{ summary_data.videos_with_no_issues }}</p></div>
-    <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Posts with Issues</p><p id="videos-issues" class="text-3xl font-bold text-red-600">{{ summary_data.videos_with_issues }}</p></div>
-    <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Needs Manual Review</p><p id="videos-manual-review" class="text-3xl font-bold text-blue-600">{{ summary_data.videos_for_manual_review }}</p></div>
-</div>
-            <div class="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-                <button data-review-type="issues" class="review-btn bg-red-500 hover:bg-red-600 text-white font-bold py-4 px-6 rounded-lg shadow-lg transition duration-300">Review Posts with Issues</button>
+                <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Total Active Influencers</p><p id="total-influencers" class="text-3xl font-bold text-gray-800">{{ summary_data.number_of_influencers }}</p></div>
+                <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Not Uploaded Yet</p><p id="videos-not-uploaded" class="text-3xl font-bold text-yellow-600">{{ summary_data.videos_not_loaded_yet }}</p></div>
+                <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Posts without Issues</p><p id="videos-approved" class="text-3xl font-bold text-green-600">{{ summary_data.videos_with_no_issues }}</p></div>
+                <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Posts with Issues</p><p id="videos-issues" class="text-3xl font-bold text-red-600">{{ summary_data.videos_with_issues }}</p></div>
+                <div class="bg-white p-6 rounded-xl shadow-md"><p class="text-sm text-gray-500">Needs Manual Review</p><p id="videos-manual-review" class="text-3xl font-bold text-blue-600">{{ summary_data.videos_for_manual_review }}</p></div>
+            </div>
+            <div class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <button data-review-type="combined" class="review-btn bg-red-500 hover:bg-red-600 text-white font-bold py-4 px-6 rounded-lg shadow-lg transition duration-300">Review Posts to Check</button>
                 <button data-review-type="not_uploaded" class="review-btn bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-4 px-6 rounded-lg shadow-lg transition duration-300">Message Influencers (Not Uploaded)</button>
-                <button data-review-type="manual_review" class="review-btn bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg shadow-lg transition duration-300">Perform Manual Post Review</button>
             </div>
         </div>
 
@@ -90,6 +90,8 @@
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
                     <!-- Left Panel -->
+
+                    <div id="reviewed-tag" class="absolute top-4 right-4 bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-0.5 rounded hidden">Reviewed</div>
                     <div class="flex flex-col space-y-4">
                         <div class="bg-gray-50 p-4 rounded-lg">
                             <p class="text-sm font-medium text-gray-500">Influencer Name:</p>
@@ -120,6 +122,31 @@
                             <p id="issues-caption-issue" class="text-base text-red-800"></p>
                         </div>
 
+                        <!-- Flag Dropdown -->
+                        <div id="flag-container" class="bg-gray-50 p-4 rounded-lg hidden">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Video Feedback:</label>
+                            <select id="flag-select" class="w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                <option value="">Select Feedback</option>
+                                <option value="Video Ok">Video Ok</option>
+                                <option value="Take Down Video">Take Down Video</option>
+                            </select>
+                        </div>
+
+                        <!-- Rating -->
+                        <div id="rating-container" class="bg-gray-50 p-4 rounded-lg">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Rate this post:</label>
+                            <div class="flex items-center">
+                                <div class="rating-stars flex">
+                                    <span class="text-2xl cursor-pointer" data-rating="1" title="1 star - Not the best post in terms of quality or direction. Did not meet expected standards.">☆</span>
+                                    <span class="text-2xl cursor-pointer" data-rating="2" title="2 star - Falls short of expected level. Content could be improved. Lower quality.">☆</span>
+                                    <span class="text-2xl cursor-pointer" data-rating="3" title="3 star - A good reliable performer. All deliverables were correctly met, quality is on par. Content is acceptable.">☆</span>
+                                    <span class="text-2xl cursor-pointer" data-rating="4" title="4 star - Good performance in terms of quality and content direction. Noticeably better than the expected level.">☆</span>
+                                    <span class="text-2xl cursor-pointer" data-rating="5" title="5 star - Exceptional post and outstanding content. Post exceeded expectations.">☆</span>
+                                </div>
+                                <span id="rating-value" class="ml-2 text-gray-500">(0)</span>
+                            </div>
+                        </div>
+
                         <!-- Transcript (for manual review) -->
                         <div id="transcript-container" class="bg-gray-50 p-4 rounded-lg hidden">
                             <p class="text-sm font-medium text-gray-500 mb-2">Video Transcript:</p>
@@ -139,29 +166,44 @@
                             <textarea id="manager-comment" class="w-full h-48 p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
                         </div>
 
-                        <button id="action-btn" class="w-full py-3 px-4 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700">
+                        <!--<button id="action-btn" onclick="window.location.href='https://web.whatsapp.com/send/?phone=%2B27836318521&text=Line%0ABreak&type=phone_number&app_absent=0'; class="w-full py-3 px-4 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700">-->
+                        <!--    Send Message-->
+                        <!--</button>-->
+
+                        <button id="action-btn"
+                                class="w-full py-3 px-4 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition duration-300 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75">
                             Send Message
                         </button>
+
+                        <!-- Add reviewed tag and approval container -->
+
+
+<!-- Approval container moved to the bottom -->
+<div id="approval-container" class="bg-gray-50 p-4 rounded-lg hidden">
+    <p id="approval-status" class="text-sm font-medium text-gray-700 mb-2">Approval Status:
+        <span id="approval-status-value" class="font-semibold">Not Approved</span>
+    </p>
+    <button id="approve-btn" class="w-full py-2 px-4 bg-green-600 text-white rounded-lg hover:bg-green-700">Approve Post</button>
+</div>
                     </div>
                 </div>
-                <div class="flex justify-between mt-6">
-                    <button id="issues-prev-btn" class="py-3 px-6 rounded-lg text-white font-semibold bg-gray-600 hover:bg-gray-700">
-                        ← Previous Post
-                    </button>
-                    <button id="issues-next-btn" class="py-3 px-6 rounded-lg text-white font-semibold bg-blue-600 hover:bg-blue-700">
-                        Next Post →
-                    </button>
-                </div>
+                    <div class="flex justify-between mt-6">
+                        <button id="issues-prev-btn" class="py-3 px-6 rounded-lg text-white font-semibold bg-gray-600 hover:bg-gray-700">
+                            ← Previous Post
+                        </button>
+                        <button id="issues-next-btn" class="py-3 px-6 rounded-lg text-white font-semibold bg-blue-600 hover:bg-blue-700">
+                            Next Post →
+                        </button>
+                    </div>
             </div>
             <div id="issues-empty" class="text-center p-10 text-gray-500 hidden"></div>
         </div>
     </div>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
     <script>
-    // Add this to your script.js or in a <script> tag
     document.getElementById('back-to-campaigns-btn').addEventListener('click', () => {
         window.location.href = "{{ url_for('campaign_select') }}";
     });
-</script>
+    </script>
 </body>
 </html>
