@@ -13,22 +13,36 @@
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen p-4 flex items-center justify-center">
+    <!-- Back button -->
+    <header class="absolute top-4 left-4">
+        <button id="back-to-summary-btn" class="py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition duration-300 hidden">
+            ← Back to Summary
+        </button>
+    </header>
+
     <div class="max-w-4xl w-full">
         <div class="bg-white rounded-xl shadow-lg p-8">
-            <h1 class="text-3xl font-bold text-gray-800 mb-2 text-center">Select Campaign to Audit</h1>
+            <h1 class="text-3xl font-bold text-gray-800 mb-2 text-center">Select Campaign</h1>
             <p class="text-gray-600 text-center mb-8">Choose a campaign to begin the review process</p>
 
             <div id="campaigns-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {% for campaign in campaigns %}
-<div class="campaign-card bg-white rounded-lg border border-gray-200 p-6 cursor-pointer transition-all duration-300 shadow hover:shadow-md">
-    <h3 class="text-xl font-bold text-gray-800 mb-4">{{ campaign.name }}</h3>
-    <!-- REMOVED DESCRIPTION LINE -->
-    <button class="campaign-option w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-            data-campaign-id="{{ campaign.id }}">
-        Start Audit
-    </button>
-</div>
-{% endfor %}
+                <div class="campaign-card bg-white rounded-lg border border-gray-200 p-6 cursor-pointer transition-all duration-300 shadow hover:shadow-md">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4">{{ campaign.name }}</h3>
+
+                    <!-- Start Audit Button -->
+                    <button class="campaign-option w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition mb-2"
+                            data-campaign-id="{{ campaign.id }}">
+                        Start Audit
+                    </button>
+
+                    <!-- New Go to Summary Button -->
+                    <button class="summary-option w-full py-2 px-4 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition"
+                            data-campaign-id="{{ campaign.id }}">
+                        View Summary
+                    </button>
+                </div>
+                {% endfor %}
             </div>
 
             <div id="loading-campaigns" class="text-center py-12 {% if campaigns %}hidden{% endif %}">
@@ -41,11 +55,13 @@
     <script>
     document.addEventListener('DOMContentLoaded', () => {
         const campaignButtons = document.querySelectorAll('.campaign-option');
+        const summaryButtons = document.querySelectorAll('.summary-option');
+        const backToSummaryBtn = document.getElementById('back-to-summary-btn');
 
+        // Handle Start Audit button clicks
         campaignButtons.forEach(button => {
             button.addEventListener('click', async () => {
                 const campaignId = button.dataset.campaignId;
-                const buttonText = button.textContent;
                 const originalHTML = button.innerHTML;
 
                 // Show loading state
@@ -56,6 +72,9 @@
                     </svg> Starting Audit...
                 `;
                 button.disabled = true;
+
+                // Show the back button
+                backToSummaryBtn.classList.remove('hidden');
 
                 try {
                     // Start the audit process
@@ -82,7 +101,21 @@
                 }
             });
         });
+
+        // Handle Go to Summary button clicks
+        summaryButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                const campaignId = button.dataset.campaignId;
+                // Redirect directly to summary page
+                window.location.href = `/summary?campaign_id=${campaignId}`;
+            });
+        });
+
+        // Handle back button click
+        backToSummaryBtn.addEventListener('click', () => {
+            window.location.href = "{{ url_for('summary_page') }}";
+        });
     });
-</script>
+    </script>
 </body>
 </html>
