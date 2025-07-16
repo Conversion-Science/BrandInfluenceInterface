@@ -14,29 +14,26 @@ logging.basicConfig(level=logging.INFO)
 AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY')
 AIRTABLE_BASE_ID = os.environ.get('AIRTABLE_BASE_ID')
 
-# Table names from your structure
-INFLUENCERS_TABLE = 'influencerTable'
-POSTS_TABLE = 'postTable'
-ERRORS_TABLE = 'contentErrorLogTable'
-CAMPAIGNS_TABLE = 'campaignTable'
+# Table names
+TABLES = {
+    'influencers': 'influencerTable',
+    'posts': 'postTable',
+    'errors': 'contentErrorLogTable',
+    'campaigns': 'campaignTable'
+}
 
 # --- Initialize Airtable Connections ---
 app.logger.info("Initializing Airtable connections...")
-influencers_table = None
-posts_table = None
-errors_table = None
-campaigns_table = None
-active_campaigns = {}  # Track campaigns being audited
+tables = {}
+active_campaigns = {}
 
 if AIRTABLE_API_KEY and AIRTABLE_BASE_ID:
     try:
-        influencers_table = Airtable(AIRTABLE_BASE_ID, INFLUENCERS_TABLE, AIRTABLE_API_KEY)
-        posts_table = Airtable(AIRTABLE_BASE_ID, POSTS_TABLE, AIRTABLE_API_KEY)
-        errors_table = Airtable(AIRTABLE_BASE_ID, ERRORS_TABLE, AIRTABLE_API_KEY)
-        campaigns_table = Airtable(AIRTABLE_BASE_ID, CAMPAIGNS_TABLE, AIRTABLE_API_KEY)
+        for name, table_id in TABLES.items():
+            tables[name] = Airtable(AIRTABLE_BASE_ID, table_id, AIRTABLE_API_KEY)
 
         # Test connection
-        influencers_table.get_all(max_records=1)
+        tables['influencers'].get_all(max_records=1)
         app.logger.info("Airtable connection successful")
     except Exception as e:
         app.logger.error(f"Airtable connection failed: {str(e)}")
@@ -44,191 +41,277 @@ else:
     app.logger.error("Missing AIRTABLE_API_KEY or AIRTABLE_BASE_ID in environment")
 
 # --- Helper Functions ---
+def get_record(table_name, record_id, default=None):
+    """Generic function to get a record from any table"""
+    if not record_id or table_name not in tables:
+        return default
+    try:
+        return tables[table_name].get(record_id)
+    except Exception:
+        return default
+
 def get_influencer_name(influencer_id):
     """Get influencer name by ID"""
-    if not influencer_id or not influencers_table:
-        return "Unknown Influencer"
-    try:
-        record = influencers_table.get(influencer_id)
-        return record['fields'].get('Name', 'Unknown Influencer')
-    except:
-        return "Unknown Influencer"
-
-def get_influencer_details(influencer_id):
-    """Get influencer details by ID"""
-    if not influencer_id or not influencers_table:
-        return None
-    try:
-        return influencers_table.get(influencer_id)['fields']
-    except:
-        return None
+    record = get_record('influencers', influencer_id)
+    return record['fields'].get('Name', 'Unknown Influencer') if record else 'Unknown Influencer'
 
 def get_campaign_details(campaign_id):
     """Get campaign details by ID"""
-    if not campaign_id or not campaigns_table:
-        return None
-    try:
-        return campaigns_table.get(campaign_id)['fields']
-    except:
-        return None
+    record = get_record('campaigns', campaign_id)
+    return record['fields'] if record else None
 
 def ensure_list(value):
-    """Ensure the value is a list, even if it's a single value"""
+    """Ensure the value is a list"""
     if value is None:
         return []
-    if isinstance(value, list):
-        return value
-    return [value]
-
-def get_required_tags(campaign_id):
-    """Get required tags and hashtags for a campaign"""
-    campaign = get_campaign_details(campaign_id)
-    if not campaign:
-        return "", ""
-    hashtags = campaign.get('requiredHastags', '')
-    tags = campaign.get('requiredTags', '')
-    return hashtags, tags
-
-def get_campaign_name(campaign_id):
-    """Get name of campaign"""
-    campaign = get_campaign_details(campaign_id)
-    if not campaign:
-        return "", ""
-    campaign_name = campaign.get('campaignName', '')
-    app.logger.info(f"Triggering n8n via Google Apps Script for campaign {campaign_name}")
-    return campaign_name
+    return value if isinstance(value, list) else [value]
 
 def get_campaign_value(campaign_record_id):
-    if not campaign_record_id or not campaigns_table:
-        return None
-    try:
-        campaign_record = campaigns_table.get(campaign_record_id)
-        fields = campaign_record.get('fields', {})
-
-        # Try different field names
-        for field_name in ['CampaignID', 'ID', 'Campaign_ID', 'campaign_id', 'campaignId']:
-            if field_name in fields:
-                value = fields[field_name]
-                # Convert to string if it's a number
-                return str(value) if isinstance(value, (int, float)) else value
-
-        # Fallback to record ID
+    """Get campaign value from record ID"""
+    campaign = get_record('campaigns', campaign_record_id)
+    if not campaign:
         return campaign_record_id
-    except Exception as e:
-        app.logger.error(f"Error getting campaign value: {str(e)}")
-        return None
 
+    fields = campaign.get('fields', {})
+    for field_name in ['CampaignID', 'ID', 'Campaign_ID', 'campaign_id', 'campaignId']:
+        if field_name in fields:
+            value = fields[field_name]
+            return str(value) if isinstance(value, (int, float)) else value
+
+    return campaign_record_id
+
+def get_first_name(full_name):
+    """Extract first name from 'Surname, First Name' format"""
+    if not full_name:
+        return "Unknown"
+
+    if ',' in full_name:
+        parts = full_name.split(',', 1)
+        return parts[0].strip() if len(parts) > 1 else parts[0].strip()
+    return full_name.strip()
+
+def get_campaign_name_from_value(campaign_value):
+    """Get campaign name from campaign value (not record ID)"""
+    if not campaign_value:
+        return "No Campaign Selected"
+
+    try:
+        # Search for campaign by value in different fields
+        for field_name in ['CampaignID', 'ID', 'Campaign_ID', 'campaign_id', 'campaignId']:
+            formula = f"{{{field_name}}}='{campaign_value}'"
+            try:
+                campaigns = tables['campaigns'].get_all(formula=formula)
+                if campaigns:
+                    campaign = campaigns[0]  # Get the first match
+                    fields = campaign.get('fields', {})
+                    for name_field in ['campaignName', 'name', 'Name', 'campaign_name', 'CampaignName']:
+                        if name_field in fields and fields[name_field]:
+                            return fields[name_field]
+            except Exception:
+                continue
+
+        # If not found by formula, return the value
+        return f"Campaign {campaign_value}"
+
+    except Exception as e:
+        app.logger.error(f"Error getting campaign name from value {campaign_value}: {str(e)}")
+        return f"Campaign {campaign_value}"
+
+def debug_campaign_data(campaign_id):
+    """Debug function to see what's in the campaign record"""
+    try:
+        campaign_record = get_record('campaigns', campaign_id)
+        if campaign_record:
+            print(f"Campaign record for ID {campaign_id}:")
+            print(f"Full record: {campaign_record}")
+            print(f"Fields: {campaign_record.get('fields', {})}")
+
+            # Check what fields are available
+            fields = campaign_record.get('fields', {})
+            print(f"Available field names: {list(fields.keys())}")
+
+            # Try to find name fields
+            for field_name in fields.keys():
+                if 'name' in field_name.lower() or 'campaign' in field_name.lower():
+                    print(f"Potential name field: {field_name} = {fields[field_name]}")
+        else:
+            print(f"No campaign record found for ID: {campaign_id}")
+
+        # Also check all campaigns to see the structure
+        print("\nAll campaigns structure:")
+        all_campaigns = tables['campaigns'].get_all(max_records=3)
+        for i, campaign in enumerate(all_campaigns):
+            print(f"Campaign {i}: {campaign.get('fields', {})}")
+
+    except Exception as e:
+        print(f"Error debugging campaign data: {str(e)}")
+
+def get_campaign_name(campaign_id):
+    """Get formatted campaign name with better error handling"""
+    if not campaign_id:
+        return "No Campaign Selected"
+
+    try:
+        # Try to get the campaign record
+        campaign_record = get_record('campaigns', campaign_id)
+
+        if campaign_record and 'fields' in campaign_record:
+            # Try different possible field names for campaign name
+            fields = campaign_record['fields']
+            for field_name in ['campaignName', 'name', 'Name', 'campaign_name', 'CampaignName']:
+                if field_name in fields and fields[field_name]:
+                    return fields[field_name]
+
+        # If no campaign name found, return the ID
+        return f"Campaign {campaign_id}"
+
+    except Exception as e:
+        app.logger.error(f"Error getting campaign name for ID {campaign_id}: {str(e)}")
+        return f"Campaign {campaign_id}"
+
+# --- Data Processing Functions ---
+def parse_error_description(error_desc):
+    """Parse error description and extract unique hashtags and tags"""
+    missing_hashtags = set()
+    missing_tags = set()
+
+    for part in error_desc.split("Partially Correct/Incorrect"):
+        if not part.strip():
+            continue
+
+        for error_part in part.split("-"):
+            error_part = error_part.strip()
+            if error_part.startswith("Missing Hashtags:"):
+                hashtags = [h.strip() for h in error_part.replace("Missing Hashtags:", "").split(",") if h.strip()]
+                missing_hashtags.update(hashtags)
+            elif error_part.startswith("Missing Tags:"):
+                tags = [t.strip() for t in error_part.replace("Missing Tags:", "").split(",") if t.strip()]
+                missing_tags.update(tags)
+
+    return list(missing_hashtags), list(missing_tags)
+
+def format_suggested_message(first_name, campaign_name, error_parts=None, flag=None, post_link=None):
+    """Format the suggested message with feedback option"""
+    if flag == 'Take Down Video':
+        message_lines = [
+            f"Hi {first_name},",
+            f"We are issuing a takedown notice for your recent post for {campaign_name or 'the campaign'}:",
+            *(error_parts or []),
+            f"View it here: {post_link or 'your post'}",
+            "Please take it down promptly.",
+            "Thanks!"
+        ]
+    elif flag == 'Video Ok':
+        message_lines = [
+            f"Hi {first_name},",
+            f"We are confirming that your recent post for {campaign_name or 'the campaign'} is approved:",
+            f"View it here: {post_link or 'your post'}",
+            "It can remain online.",
+            "Thanks!"
+        ]
+    elif error_parts:
+        message_lines = [
+            f"Hi {first_name},",
+            f"We noticed issues with your recent post for {campaign_name or 'the campaign'}:",
+            *error_parts,
+            f"View it here: {post_link or 'your post'}",
+            "Please review and update.",
+            "Thanks!"
+        ]
+    else:
+        message_lines = [
+            f"Hi {first_name},",
+            f"Great job on your recent post for {campaign_name or 'the campaign'}!",
+            f"View it here: {post_link or 'your post'}",
+            "Your content looks perfect and meets all requirements.",
+            "Thank you for your excellent work!",
+            "Keep it up!"
+        ]
+    return "\n".join(message_lines)
+
+def get_active_influencers():
+    """Get active influencers with their TikTok links"""
+    formula = "AND({Active}='YES')" #, {Audited}='YES'
+    try:
+        records = tables['influencers'].get_all(formula=formula)
+        return {rec['fields'].get('TiktokLink', '').strip(): rec for rec in records if rec['fields'].get('TiktokLink')}
+    except Exception as e:
+        app.logger.error(f"Error getting active influencers: {str(e)}")
+        return {}
+
+def get_campaign_posts(campaign_value):
+    """Get posts for a specific campaign"""
+    try:
+        if campaign_value:
+            formula = f"{{CampaignId}}='{campaign_value}'"
+            return tables['posts'].get_all(formula=formula)
+        return tables['posts'].get_all()
+    except Exception as e:
+        app.logger.error(f"Error getting campaign posts: {str(e)}")
+        return []
+
+# --- Core Business Logic ---
 def trigger_n8n_audit(campaign_id):
     """Background task to trigger n8n audit"""
     script_url = "https://script.google.com/macros/s/AKfycbzRsWR8IfOAacu208nin_dlqTLLDRBZXhuVx6yUQ_BjsPrV6MVnlkZontzcWBPkjG4/exec"
-    campaign_name = ""
+    campaign_name = get_campaign_name(campaign_id)
+
     try:
-        campaign_details = get_campaign_details(campaign_id)
-        if campaign_details:
-            campaign_name = campaign_details.get('campaignName', 'Unnamed Campaign')
-        else:
-            campaign_name = f"Campaign {campaign_id}"
-    except Exception as e:
-        app.logger.error(f"Error getting campaign name: {str(e)}")
-        campaign_name = f"Campaign {campaign_id}"
-    try:
-        app.logger.info(f"Triggering n8n via Google Apps Script for campaign: {campaign_name}")
-        response = requests.post(
-            script_url,
-            json={'campaign_name': campaign_name},
-            timeout=30
-        )
+        app.logger.info(f"Triggering n8n for campaign: {campaign_name}")
+        response = requests.post(script_url, json={'campaign_name': campaign_name}, timeout=30)
+
         if response.status_code == 200:
-            app.logger.info(f"n8n audit triggered successfully for campaign: {campaign_name}")
-            app.logger.debug(f"Proxy response: {response.text}")
+            app.logger.info(f"Audit triggered for {campaign_name}")
         else:
             app.logger.error(f"Proxy error: {response.status_code} - {response.text}")
     except Exception as e:
-        app.logger.error(f"Error triggering n8n audit via proxy: {str(e)}")
+        app.logger.error(f"Error triggering audit: {str(e)}")
     finally:
         time.sleep(10)
         active_campaigns.pop(campaign_id, None)
 
-# --- Routes ---
-@app.route('/')
-def root():
-    """Redirect to campaign selection page"""
-    return redirect(url_for('campaign_select'))
-
-
-@app.route('/summary')
-def summary_page():
-    """Show summary page for a specific campaign"""
-    campaign_id = request.args.get('campaign_id', '')
-    campaign_name = ""
-    if campaign_id:
-        campaign = get_campaign_details(campaign_id)
-        if campaign:
-            campaign_name = campaign.get('campaignName', campaign_id)
-        else:
-            campaign_name = campaign_id
-    if not all([posts_table, influencers_table, errors_table]):
-        return "Airtable connection error. Check server logs.", 500
+def compute_summary_data(campaign_id):
+    """Compute summary data for a campaign"""
     try:
-        all_posts = posts_table.get_all()
-        all_influencers = influencers_table.get_all()
-        all_errors = errors_table.get_all()
+        campaign_value = get_campaign_value(campaign_id) if campaign_id else None
 
-        # Get active influencers using profile links
-        active_influencers = set()
-        for influencer in all_influencers:
-            fields = influencer.get('fields', {})
-            if fields.get('Active', '').upper() == 'YES':
-                profile_link = fields.get('TiktokLink', '')
-                if profile_link:
-                    active_influencers.add(profile_link)
+        # Get active influencers
+        active_influencers = get_active_influencers()
+        active_tiktok_links = set(active_influencers.keys())
 
-        # Use sets to track unique posts and avoid duplicates
-        posts_with_issues_links = set()
+        # Get campaign posts
+        campaign_posts = get_campaign_posts(campaign_value)
+
+        # Initialize counters
+        posts_with_issues = 0
         posts_no_issues = 0
+        posted_tiktok_links = set()
         posts_for_manual_review = 0
-        campaign_post_count = 0
-        posted_profile_links = set()
 
-        for post in all_posts:
+        # Process posts
+        for post in campaign_posts:
             fields = post.get('fields', {})
+            tiktok_link = fields.get('TikTokLink', '').strip()
+            post_flag = fields.get('ManualFlag')  # This is the field we check for manual review
+
+            if tiktok_link:
+                posted_tiktok_links.add(tiktok_link)
+
             quality = fields.get('PostQuality', '').strip()
-            post_campaign_id = fields.get('CampaignId', '')
-            if campaign_id and post_campaign_id != campaign_id:
-                continue
-
-            campaign_post_count += 1
-
-            # Track posted profile links
-            post_tiktok_link = fields.get('TikTokLink', '')
-            if post_tiktok_link:
-                posted_profile_links.add(post_tiktok_link)
-
-            # Get PostLink for deduplication
-            post_link = fields.get('PostLink', '')
-
-            # Categorize posts based on PostQuality
             if quality == 'All Correct':
                 posts_no_issues += 1
             elif quality == 'Partially Correct/Incorrect':
-                # Only count unique PostLinks to avoid duplicates
-                if post_link:
-                    posts_with_issues_links.add(post_link)
-            # Add other quality conditions as needed
+                posts_with_issues += 1
 
-        # Calculate total active influencers
+            # Count posts with no "ManualFlag" value as needing manual review
+            if not post_flag:
+                posts_for_manual_review += 1
+
+        # Calculate metrics
         total_influencers = len(active_influencers)
+        videos_not_loaded = len(active_tiktok_links - posted_tiktok_links)
 
-        # Calculate videos not loaded - start from 0 and increment
-        videos_not_loaded = 0
-        for active_influencer in active_influencers:
-            if active_influencer not in posted_profile_links:
-                videos_not_loaded += 1
-
-        # Get actual count of posts with issues (deduplicated)
-        posts_with_issues = len(posts_with_issues_links)
-
-        summary_data = {
+        return {
             "number_of_influencers": total_influencers,
             "videos_with_no_issues": posts_no_issues,
             "videos_with_issues": posts_with_issues,
@@ -236,53 +319,414 @@ def summary_page():
             "videos_for_manual_review": posts_for_manual_review,
         }
 
-        return render_template('index.html',
+    except Exception as e:
+        app.logger.error(f"Error computing summary data: {str(e)}")
+        return {
+            "number_of_influencers": 0,
+            "videos_with_no_issues": 0,
+            "videos_with_issues": 0,
+            "videos_not_loaded_yet": 0,
+            "videos_for_manual_review": 0,
+        }
+
+def get_all_posts_without_issues(campaign_value):
+    """Get all posts without issues for the campaign"""
+    try:
+        # Get all posts for the campaign
+        posts = get_campaign_posts(campaign_value)
+
+        # Get posts with issues to exclude them
+        posts_with_issues = get_all_posts_with_issues(campaign_value)
+        issue_post_ids = {post['postId'] for post in posts_with_issues} if posts_with_issues else set()
+        influencers = tables['influencers'].get_all()
+        contact_map = {}
+        for inf in influencers:
+            name = inf['fields'].get('Name')
+            if name:
+                contact_map[name] = inf['fields'].get('ContactNumber', '')
+
+        results = []
+
+        # Get campaign name once for all posts
+        campaign_name = get_campaign_name_from_value(campaign_value)
+
+        for post in posts:
+            post_id = post['id']
+            fields = post.get('fields', {})
+            post_link = fields.get('PostLink', '')
+
+
+            # Skip posts that have issues
+            if post_id in issue_post_ids:
+                continue
+
+            # Only include posts with "All Correct" quality
+            quality = fields.get('PostQuality', '').strip()
+            if quality != 'All Correct' or not post_link:
+                continue
+
+            # Process influencer name
+            full_name = fields.get('InfluencerName', 'Unknown Influencer')
+            first_name = get_first_name(full_name)
+            contact_number = str(contact_map.get(full_name, ''))
+
+            suggested_message = format_suggested_message(first_name, campaign_name)
+
+            results.append({
+                'postId': post_id,
+                'influencerName': full_name,
+                'videoLink': post_link,
+                'issueCaption': None,
+                'suggestedMessage': suggested_message,
+                'hasIssues': False,
+                'currentRating': fields.get('manualRating', 0),
+                'currentFlag': fields.get('reviewFlag', ''),
+                'contactNumber': contact_number or '',
+                'type': 'combined'
+            })
+
+        return results
+    except Exception as e:
+        app.logger.error(f"Error getting posts without issues: {str(e)}")
+        return []
+
+def get_all_posts_with_issues(campaign_value):
+    """Get all posts with issues for the campaign"""
+    try:
+        # Group errors by post ID
+        all_errors = defaultdict(list)
+        for error in tables['errors'].get_all():
+            error_fields = error.get('fields', {})
+            for pid in ensure_list(error_fields.get('postId', [])):
+                all_errors[str(pid)].append(error_fields.get('errorDescription', 'Unknown error'))
+
+        # Get all posts for the campaign
+        posts = get_campaign_posts(campaign_value)
+
+        influencers = tables['influencers'].get_all()
+        contact_map = {}
+        for inf in influencers:
+            name = inf['fields'].get('Name')
+            if name:
+                contact_map[name] = inf['fields'].get('ContactNumber', '')
+
+        # Create post ID mapping
+        post_id_to_record = {}
+        for post in posts:
+            fields = post.get('fields', {})
+            for field in ['PostID', 'ID', 'Post_ID', 'post_id', 'postId', 'id']:
+                if field in fields and fields[field]:
+                    post_id_to_record[str(fields[field])] = post
+                    break
+
+        results = []
+        processed_links = set()
+
+        # Get campaign name once for all posts
+        campaign_name = get_campaign_name_from_value(campaign_value)
+
+        for error_id, error_descriptions in all_errors.items():
+            if error_id not in post_id_to_record:
+                continue
+
+            post = post_id_to_record[error_id]
+            fields = post.get('fields', {})
+            post_link = fields.get('PostLink', '')
+
+            if post_link in processed_links:
+                continue
+            processed_links.add(post_link)
+
+            # Process influencer name
+            full_name = fields.get('InfluencerName', 'Unknown Influencer')
+            first_name = get_first_name(full_name)
+            contact_number = str(contact_map.get(full_name, ''))
+
+            # Process errors
+            all_hashtags = set()
+            all_tags = set()
+            for desc in error_descriptions:
+                hashtags, tags = parse_error_description(desc)
+                all_hashtags.update(hashtags)
+                all_tags.update(tags)
+
+            # Format message
+            error_parts = []
+            if all_hashtags:
+                error_parts.append(f"Missing Hashtags: {', '.join(sorted(all_hashtags))}")
+            if all_tags:
+                error_parts.append(f"Missing Tags: {', '.join(sorted(all_tags))}")
+
+            suggested_message = format_suggested_message(
+                first_name,
+                campaign_name,
+                error_parts
+            )
+
+            results.append({
+                'postId': post['id'],
+                'influencerName': full_name,
+                'videoLink': post_link or '#',
+                'issueCaption': "; ".join(error_parts) or "Please review your post",
+                'suggestedMessage': suggested_message,
+                'hasIssues': True,
+                'currentRating': fields.get('manualRating', 0),
+                'currentFlag': fields.get('reviewFlag', ''),
+                'contactNumber': contact_number or '',
+                'type': 'combined'
+            })
+
+        return results
+    except Exception as e:
+        app.logger.error(f"Error getting posts with issues: {str(e)}")
+        return []
+
+def get_all_posts_combined(campaign_value):
+    """Get all posts combined - issues first, then without issues"""
+    campaign_name = get_campaign_name_from_value(campaign_value)
+    posts_with_issues = get_all_posts_with_issues(campaign_value)
+    posts_without_issues = get_all_posts_without_issues(campaign_value)
+
+    # Combine with issues first
+    combined = posts_with_issues + posts_without_issues
+
+    # Add reviewed status and campaign name to each post
+    for post in combined:
+        post_record = get_record('posts', post.get('postId'))
+        if post_record:
+            fields = post_record.get('fields', {})
+            post['reviewed'] = fields.get('reviewed', False)
+            post['approved_Status'] = fields.get('approved_Status', 'NO')
+        # Add campaign name to each post
+        post['campaignName'] = campaign_name
+
+    return combined
+
+def process_not_uploaded_review(campaign_value, campaign_id):
+    """Process influencers who haven't uploaded"""
+    try:
+        active_influencers = get_active_influencers()
+        campaign_posts = get_campaign_posts(campaign_value)
+
+        # Get posted links
+        posted_links = set()
+        for post in campaign_posts:
+            fields = post.get('fields', {})
+            tiktok_link = fields.get('TikTokLink', '').strip()
+            if tiktok_link:
+                posted_links.add(tiktok_link)
+
+        # Prepare results
+        results = []
+
+        # Get campaign name - try from value first, then from record ID
+        campaign_name = get_campaign_name_from_value(campaign_value)
+        if campaign_name.startswith('Campaign ') or not campaign_name:
+            # If we couldn't find it by value, try by record ID
+            campaign_name = get_campaign_name(campaign_id)
+
+        for tiktok_link, influencer in active_influencers.items():
+            if tiktok_link in posted_links:
+                continue
+
+            fields = influencer['fields']
+            full_name = fields.get('Name', 'Unknown Influencer')
+            first_name = get_first_name(full_name)
+            contact_number = str(fields.get('ContactNumber', ''))
+
+            results.append({
+                'influencerId': influencer['id'],
+                'influencerName': full_name,
+                'tiktokLink': tiktok_link,
+                'instagramLink': fields.get('InstagramLink', '#'),
+                'suggestedMessage': (
+                    f"Hi {first_name},\n"
+                    f"We noticed you haven't uploaded your video for {campaign_name} yet.\n"
+                    "Please upload it as soon as possible.\n"
+                    "Thanks!"
+                ),
+                'contactNumber': contact_number or '',
+                'type': 'not_uploaded'
+            })
+
+        return results
+    except Exception as e:
+        app.logger.error(f"Error processing not uploaded: {str(e)}")
+        return []
+
+def process_manual_review(campaign_value):
+    """Process posts needing manual review"""
+    try:
+        formula = f"{{PostQuality}}='Manual Review' AND {{CampaignId}}='{campaign_value}'" if campaign_value else "{PostQuality}='Manual Review'"
+        posts = tables['posts'].get_all(formula=formula)
+
+        return [{
+            'postId': post['id'],
+            'influencerName': post['fields'].get('InfluencerName', 'Unknown Influencer'),
+            'videoLink': post['fields'].get('PostLink', '#'),
+            'transcript': post['fields'].get('VideoTranscription', 'No transcript available'),
+            'currentFlag': post['fields'].get('reviewFlag', ''),
+            'type': 'manual_review'
+        } for post in posts]
+    except Exception as e:
+        app.logger.error(f"Error processing manual review: {str(e)}")
+        return []
+
+
+
+# --- New Routes ---
+@app.route('/save_flag', methods=['POST'])
+def save_flag():
+    """Save review flag to Airtable"""
+    try:
+        data = request.json
+        post_id = data.get('postId')
+        flag = data.get('flag')
+
+        if not post_id or not flag:
+            return jsonify({"error": "Missing postId or flag"}), 400
+
+        # Update the post record in Airtable
+        tables['posts'].update(post_id, {'ManualFlag': flag})
+
+        app.logger.info(f"Flag saved: Post {post_id} flagged as {flag}")
+        return jsonify({"status": "success", "message": "Flag saved successfully"})
+    except Exception as e:
+        app.logger.error(f"Flag error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/save_rating', methods=['POST'])
+def save_rating():
+    """Save rating to Airtable"""
+    try:
+        data = request.json
+        post_id = data.get('postId')
+        rating = data.get('rating')
+
+        if not post_id or not rating:
+            return jsonify({"error": "Missing postId or rating"}), 400
+
+        # Validate rating
+        if not isinstance(rating, int) or rating < 1 or rating > 5:
+            return jsonify({"error": "Rating must be between 1 and 5"}), 400
+
+        # Update the post record in Airtable
+        tables['posts'].update(post_id, {'manualRating': rating})
+
+        app.logger.info(f"Rating saved: Post {post_id} rated {rating}")
+        return jsonify({"status": "success", "message": "Rating saved successfully"})
+    except Exception as e:
+        app.logger.error(f"Rating error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/log_message', methods=['POST'])
+def log_message():
+    """Log message sending activity"""
+    try:
+        data = request.json
+        app.logger.info(
+            f"Message sent to {data.get('contactNumber')} "
+            f"for {data.get('influencerName')}: "
+            f"{data.get('message')}"
+        )
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        app.logger.error(f"Log error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- Existing Routes ---
+@app.route('/')
+def root():
+    return redirect(url_for('campaign_select'))
+
+@app.route('/summary')
+def summary_page():
+    """Show summary page for a campaign"""
+    campaign_id = request.args.get('campaign_id', '')
+    campaign_name = get_campaign_name(campaign_id) if campaign_id else ""
+
+    if not tables:
+        return "Airtable connection error", 500
+
+    try:
+        summary_data = compute_summary_data(campaign_id)
+        return render_template(
+            'index.html',
             summary_data=summary_data,
             campaign_id=campaign_id,
             campaign_name=campaign_name,
             active_campaigns=active_campaigns
         )
     except Exception as e:
-        app.logger.error(f"Error in summary_page: {str(e)}")
+        app.logger.error(f"Summary error: {str(e)}")
         return f"Server Error: {str(e)}", 500
 
 @app.route('/campaign_select')
 def campaign_select():
-    """Show campaign selection screen"""
-    if not campaigns_table:
+    """Campaign selection screen"""
+    if 'campaigns' not in tables:
         return "Airtable connection error", 500
+
     try:
-        campaigns = campaigns_table.get_all()
-        campaign_list = []
-        for c in campaigns:
-            fields = c.get('fields', {})
-            campaign_list.append({
-                'id': c['id'],
-                'name': fields.get('campaignName', 'Unnamed Campaign')
-            })
+        campaigns = tables['campaigns'].get_all()
+        campaign_list = [{
+            'id': c['id'],
+            'name': c['fields'].get('campaignName', 'Unnamed Campaign')
+        } for c in campaigns]
+
         return render_template('campaign_select.html', campaigns=campaign_list)
     except Exception as e:
-        app.logger.error(f"Error fetching campaigns: {str(e)}")
+        app.logger.error(f"Campaign select error: {str(e)}")
         return "Error loading campaigns", 500
+
+@app.route('/mark_reviewed', methods=['POST'])
+def mark_reviewed():
+    """Mark post as reviewed"""
+    try:
+        data = request.json
+        post_id = data.get('postId')
+        reviewed = data.get('reviewed')  # True or False
+
+        if not post_id:
+            return jsonify({"error": "Missing postId"}), 400
+
+        tables['posts'].update(post_id, {'reviewed': reviewed})
+        app.logger.info(f"Review status saved: Post {post_id} - {reviewed}")
+        return jsonify({"status": "success", "message": "Review status saved"})
+    except Exception as e:
+        app.logger.error(f"Review status error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/approve_post', methods=['POST'])
+def approve_post():
+    """Set approval status for a post"""
+    try:
+        data = request.json
+        post_id = data.get('postId')
+        status = data.get('status')  # 'YES' or 'NO'
+
+        if not post_id or not status:
+            return jsonify({"error": "Missing postId or status"}), 400
+
+        tables['posts'].update(post_id, {'approved_Status': status})
+        app.logger.info(f"Approval status saved: Post {post_id} - {status}")
+        return jsonify({"status": "success", "message": "Approval status saved"})
+    except Exception as e:
+        app.logger.error(f"Approval error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/start_audit', methods=['POST'])
 def start_audit():
-    """Start the audit process for a campaign"""
+    """Start audit process for a campaign"""
     campaign_id = request.json.get('campaign_id')
     if not campaign_id:
         return jsonify({'error': 'Missing campaign_id'}), 400
-    campaign_name = ""
-    try:
-        campaign_details = get_campaign_details(campaign_id)
-        if campaign_details:
-            campaign_name = campaign_details.get('campaignName', campaign_id)
-        else:
-            campaign_name = campaign_id
-    except:
-        campaign_name = campaign_id
+
+    campaign_name = get_campaign_name(campaign_id)
     thread = threading.Thread(target=trigger_n8n_audit, args=(campaign_id,))
     thread.daemon = True
     thread.start()
+
     active_campaigns[campaign_id] = True
     return jsonify({
         "status": "success",
@@ -292,411 +736,98 @@ def start_audit():
 
 @app.route('/audit_status')
 def audit_status():
-    """Check if any audits are active"""
-    return jsonify({
-        'active_audits': list(active_campaigns.keys())
-    })
-
-
-def get_first_name(full_name):
-    """Extract first name from 'Surname, First Name' format"""
-    if ',' in full_name:
-        parts = full_name.split(',')
-        if len(parts) >= 2:
-            return parts[0].strip()
-    return full_name.strip()
-
-def parse_error_description(error_desc):
-    """Parse error description and extract unique hashtags and tags"""
-    missing_hashtags = set()
-    missing_tags = set()
-
-    # Split by "Partially Correct/Incorrect" to handle duplicates
-    parts = error_desc.split("Partially Correct/Incorrect")
-
-    for part in parts:
-        if not part.strip():
-            continue
-
-        # Split by "-" to get different error types
-        error_parts = part.split("-")
-
-        for error_part in error_parts:
-            error_part = error_part.strip()
-
-            if error_part.startswith("Missing Hashtags:"):
-                hashtags_str = error_part.replace("Missing Hashtags:", "").strip()
-                # Split by comma and clean up
-                hashtags = [h.strip() for h in hashtags_str.split(",") if h.strip()]
-                missing_hashtags.update(hashtags)
-
-            elif error_part.startswith("Missing Tags:"):
-                tags_str = error_part.replace("Missing Tags:", "").strip()
-                # Split by comma and clean up
-                tags = [t.strip() for t in tags_str.split(",") if t.strip()]
-                missing_tags.update(tags)
-
-    return list(missing_hashtags), list(missing_tags)
-
-
-def format_suggested_message(first_name, campaign_name, error_parts):
-    """Format the suggested message in a neater multi-line format"""
-    message_lines = [f"Hi {first_name},"]
-    message_lines.append(f"We noticed issues with your recent post for {campaign_name}:")
-
-    # Add each error part on its own line
-    for part in error_parts:
-        message_lines.append(part)
-
-    message_lines.append("Please review and update.")
-    message_lines.append("Thanks!")
-
-    return "\n".join(message_lines)
+    return jsonify({'active_audits': list(active_campaigns.keys())})
 
 @app.route('/get_review_data')
 def get_review_data():
+    """Endpoint for review data"""
     review_type = request.args.get('type')
     campaign_id = request.args.get('campaign_id', '')
-    campaign_value = ''
-    if campaign_id:
-        try:
-            campaign_record = campaigns_table.get(campaign_id)
-            campaign_value = str(campaign_record.get('fields', {}).get('campaignId', ''))
-        except Exception as e:
-            app.logger.error(f"Could not get campaign value for record {campaign_id}: {e}")
-            campaign_value = campaign_id
 
-    if not all([posts_table, influencers_table, errors_table, campaigns_table]):
+    # Safely get campaign_value
+    try:
+        campaign_value = get_campaign_value(campaign_id) if campaign_id else ''
+    except Exception as e:
+        app.logger.error(f"Error getting campaign value: {str(e)}")
+        campaign_value = ''
+
+    if not tables:
         return jsonify({'error': 'Airtable connection failed'}), 500
 
     try:
-        if review_type == 'issues':
-            # Group errors by post ID (field value, not record ID)
-            all_errors = defaultdict(list)
-            error_records = errors_table.get_all()
-
-            app.logger.info(f"Found {len(error_records)} error records")
-
-            for error in error_records:
-                post_ids = ensure_list(error['fields'].get('postId', []))
-                for pid in post_ids:
-                    all_errors[str(pid)].append(error['fields'].get('errorDescription', 'Unknown error'))
-
-            # Get all posts for the campaign
-            formula = f"{{CampaignId}}='{campaign_value}'" if campaign_value else ""
-            posts = posts_table.get_all(formula=formula)
-
-            app.logger.info(f"Found {len(posts)} posts with formula: {formula}")
-
-            # Create mapping from post ID field value to post record
-            post_id_to_record = {}
-            for post in posts:
-                fields = post.get('fields', {})
-                possible_fields = ['PostID', 'ID', 'Post_ID', 'post_id', 'postId', 'id']
-
-                for field_name in possible_fields:
-                    if field_name in fields and fields[field_name] is not None:
-                        post_id_value = str(fields[field_name])
-                        post_id_to_record[post_id_value] = post
-                        break
-
-            results = []
-            processed_post_links = set()  # Track processed PostLinks to avoid duplicates
-
-            # Match errors to posts using the mapping
-            for error_post_id, error_descriptions in all_errors.items():
-                if error_post_id in post_id_to_record:
-                    post = post_id_to_record[error_post_id]
-                    fields = post.get('fields', {})
-
-                    # Check for duplicate PostLink
-                    post_link = fields.get('PostLink', '')
-                    if post_link and post_link in processed_post_links:
-                        continue  # Skip duplicate PostLink
-
-                    if post_link:
-                        processed_post_links.add(post_link)
-
-                    # Get first name only
-                    full_name = str(fields.get('InfluencerName', ''))
-                    first_name = get_first_name(full_name)
-
-                    # Get campaign details
-                    campaign_name = ""
-                    try:
-                        campaign_details = get_campaign_details(campaign_id)
-                        if campaign_details:
-                            campaign_name = campaign_details.get('campaignName', campaign_id)
-                        else:
-                            campaign_name = campaign_id
-                    except:
-                        campaign_name = campaign_id
-
-                    # Process all error descriptions and remove duplicates
-                    all_missing_hashtags = set()
-                    all_missing_tags = set()
-
-                    for error_desc in error_descriptions:
-                        hashtags, tags = parse_error_description(error_desc)
-                        all_missing_hashtags.update(hashtags)
-                        all_missing_tags.update(tags)
-
-                    # Create enhanced error message parts
-                    error_parts = []
-                    if all_missing_hashtags:
-                        error_parts.append(f"Missing Hashtags: {', '.join(sorted(all_missing_hashtags))}")
-                    if all_missing_tags:
-                        error_parts.append(f"Missing Tags: {', '.join(sorted(all_missing_tags))}")
-
-                    # Create formatted suggested message
-                    suggested_message = format_suggested_message(first_name, campaign_name, error_parts)
-
-                    # Create issue caption for display
-                    all_errors_str = "; ".join(error_parts) if error_parts else "Please review your post"
-
-                    results.append({
-                        'postId': post['id'],
-                        'influencerName': full_name,
-                        'videoLink': post_link or '#',
-                        'issueCaption': all_errors_str,
-                        'issueVideo': '',
-                        'suggestedMessage': suggested_message,
-                        'type': 'issues'
-                    })
-
-            return jsonify(results)
-
+        if review_type == 'combined':
+            results = get_all_posts_combined(campaign_value)
+        elif review_type == 'issues':
+            results = get_all_posts_with_issues(campaign_value)
         elif review_type == 'not_uploaded':
-            # Get active influencers associated with the campaign
-            all_influencers = influencers_table.get_all()
-            active_influencers = {}
-
-            # Get campaign name for messages
-            campaign_name = ""
-            try:
-                campaign_details = get_campaign_details(campaign_id)
-                if campaign_details:
-                    campaign_name = campaign_details.get('campaignName', campaign_id)
-                else:
-                    campaign_name = campaign_id
-            except:
-                campaign_name = campaign_id
-
-            # Filter influencers: Active = YES and associated with the campaign
-            active_audited_influencers = {}
-            for influencer in all_influencers:
-                fields = influencer.get('fields', {})
-                if fields.get('Active', '').upper() == 'YES' and fields.get('Audited', '').upper() == 'YES':
-                    tiktok_link = fields.get('TiktokLink', '')
-                    # active_and_audited.add(tiktok_link)
-                    if tiktok_link:
-                        # TODO: Add campaign association logic here if you have a specific field
-                        # For now, including all active influencers with TikTok links
-                        active_audited_influencers[tiktok_link] = influencer
-
-            # Get all posted TikTok links for the campaign
-            all_posts = posts_table.get_all()
-            posted_tiktok_links = set()
-
-            for post in all_posts:
-                fields = post.get('fields', {})
-                post_campaign_id = fields.get('CampaignId', '')
-                if campaign_value and post_campaign_id != campaign_value:
-                    continue
-
-                tiktok_link = fields.get('TikTokLink', '')
-                if tiktok_link:
-                    posted_tiktok_links.add(tiktok_link)
-
-            # Find active influencers who haven't uploaded yet
-            results = []
-
-            for tiktok_link, influencer in active_influencers.items():
-                # Only include influencers who haven't uploaded
-                if tiktok_link not in posted_tiktok_links:
-                    fields = influencer.get('fields', {})
-                    full_name = fields.get('Name', 'Unknown Influencer')
-                    first_name = get_first_name(full_name)
-
-                    suggested_message = (
-                        f"Hi {first_name},\n"
-                        f"We noticed you haven't uploaded your video for {campaign_name} yet.\n"
-                        f"Please upload it as soon as possible.\n"
-                        f"Thanks!"
-                    )
-
-                    results.append({
-                        'influencerId': influencer['id'],
-                        'influencerName': full_name,
-                        'tiktokLink': tiktok_link,
-                        'instagramLink': fields.get('InstagramLink', '#'),
-                        'suggestedMessage': suggested_message,
-                        'type': 'not_uploaded'
-                    })
-
-            return jsonify(results)
-
+            results = process_not_uploaded_review(campaign_value, campaign_id)
         elif review_type == 'manual_review':
-            formula = f"AND({{PostQuality}}='Manual Review', {{CampaignId}}='{campaign_value}')" if campaign_value else "{PostQuality}='Manual Review'"
-            manual_review_posts = posts_table.get_all(formula=formula)
-            results = []
-
-            for post in manual_review_posts:
-                fields = post.get('fields', {})
-                full_name = str(fields.get('InfluencerName', ''))
-                first_name = get_first_name(full_name)
-
-                results.append({
-                    'postId': post['id'],
-                    'influencerName': full_name,
-                    'videoLink': fields.get('PostLink', '#'),
-                    'transcript': fields.get('VideoTranscription', 'No transcript available'),
-                    'type': 'manual_review'
-                })
-
-            return jsonify(results)
+            results = process_manual_review(campaign_value)
         else:
             return jsonify({'error': 'Invalid review type'}), 400
 
+        return jsonify(results)
     except Exception as e:
-        app.logger.error(f"Error in get_review_data: {str(e)}")
+        app.logger.error(f"Review data error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/get_summary_data')
+def get_summary_data():
+    """Endpoint for summary data"""
+    campaign_id = request.args.get('campaign_id', '')
+    try:
+        summary_data = compute_summary_data(campaign_id)
+        return jsonify(summary_data)
+    except Exception as e:
+        app.logger.error(f"Summary data error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/send_message', methods=['POST'])
 def send_message():
-    """Handle sending messages to influencers"""
+    """Handle message sending with contact number"""
     try:
         data = request.json
-        app.logger.info(f"Message sent: {data}")
+        post_id = data.get('postId')
+        message = data.get('message')
+        contact_number = data.get('contactNumber', '')  # Get contact number
+
+        if not post_id or not message:
+            app.logger.info("Message did not send")
+            return jsonify({"error": "Missing data"}), 400
+
+        # Log message with contact number
+        app.logger.info(
+            f"Message sent for post {post_id} to {contact_number}: {message}"
+        )
+
         return jsonify({
             "status": "success",
-            "message": "Message sent successfully"
+            "message": "Message sent",
+            "contactNumber": contact_number or '' # Optional: return in response
         })
     except Exception as e:
-        app.logger.error(f"Error sending message: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": f"Failed to send message: {str(e)}"
-        }), 500
+        app.logger.error(f"Message error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/save_comment', methods=['POST'])
 def save_comment():
-    """Save manager comments for manual reviews"""
+    """Save comments"""
     try:
         data = request.json
         post_id = data.get('postId')
         comment = data.get('comment')
+
         if not post_id or not comment:
-            return jsonify({"error": "Missing post ID or comment"}), 400
+            return jsonify({"error": "Missing data"}), 400
+
+        # Update the post record in Airtable
+        tables['posts'].update(post_id, {'managerComment': comment})
+
         app.logger.info(f"Comment saved for post {post_id}: {comment}")
-        return jsonify({
-            "status": "success",
-            "message": "Comment saved successfully"
-        })
+        return jsonify({"status": "success", "message": "Comment saved"})
     except Exception as e:
-        app.logger.error(f"Error saving comment: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": f"Failed to save comment: {str(e)}"
-        }), 500
-
-@app.route('/get_summary_data')
-def get_summary_data():
-    """Return summary data as JSON with corrected logic."""
-    campaign_id = request.args.get('campaign_id', '')
-    try:
-        all_posts = posts_table.get_all()
-        all_influencers = influencers_table.get_all()
-        all_errors = errors_table.get_all()
-
-        # Get campaign value
-        campaign_value = ''
-        if campaign_id:
-            try:
-                campaign_record = campaigns_table.get(campaign_id)
-                campaign_value = str(campaign_record.get('fields', {}).get('campaignId', ''))
-            except Exception as e:
-                app.logger.error(f"Could not get campaign value for record {campaign_id}: {e}")
-                campaign_value = campaign_id
-
-        # Get active influencers using profile links
-        active_influencers = set()
-        for influencer in all_influencers:
-            fields = influencer.get('fields', {})
-            if fields.get('Active', '').upper() == 'YES':
-                profile_link = fields.get('TiktokLink', '')
-                if profile_link:
-                    active_influencers.add(profile_link)
-
-        posts_with_issues = 0
-        posts_no_issues = 0
-        posts_for_manual_review = 0
-        campaign_post_count = 0
-        posted_profile_links = set()
-
-        # Loop through posts to categorize them
-        for post in all_posts:
-            fields = post.get('fields', {})
-            post_campaign_id_str = str(fields.get('CampaignId', ''))
-
-            # Apply campaign filter if one is selected
-            if campaign_value and post_campaign_id_str != campaign_value:
-                continue
-
-            campaign_post_count += 1
-
-            # Track posted profile links
-            post_tiktok_link = fields.get('TikTokLink', '')
-            if post_tiktok_link:
-                posted_profile_links.add(post_tiktok_link)
-
-            # Categorize posts based on PostQuality
-            quality = fields.get('PostQuality', '').strip()
-            if quality == 'All Correct':
-                posts_no_issues += 1
-            elif quality == 'Partially Correct/Incorrect':
-                posts_with_issues += 1
-            # Add other quality conditions as needed
-
-        # Calculate final numbers
-        total_influencers = len(active_influencers)
-        videos_not_loaded = get_influencers_not_yet_uploaded()
-
-        summary_data = {
-            "number_of_influencers": total_influencers,
-            "videos_with_no_issues": posts_no_issues,
-            "videos_with_issues": posts_with_issues,
-            "videos_not_loaded_yet": videos_not_loaded,
-            "videos_for_manual_review": posts_for_manual_review,
-        }
-
-        return jsonify(summary_data)
-
-    except Exception as e:
-        app.logger.error(f"Error in get_summary_data: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-def get_influencers_not_yet_uploaded():
-    active_audited_influencers = set()
-    all_influencers = influencers_table.get_all()
-    for influencer in all_influencers:
-        fields = influencer.get('fields', {})
-        if fields.get('Active', '').upper() == 'YES' and fields.get('Audited', '').upper() == 'YES':
-            tiktok_link = fields.get('TiktokLink', '')
-            active_audited_influencers.add(tiktok_link)
-
-            # Get all posted TikTok links for the campaign
-    all_posts = posts_table.get_all()
-    posted_tiktok_links = set()
-    for post in all_posts:
-        fields = post.get('fields', {})
-        tiktok_link = fields.get('TikTokLink', '')
-        posted_tiktok_links.add(tiktok_link)
-
-    # Find active influencers who haven't uploaded yet
-    return len(active_audited_influencers - posted_tiktok_links)
-
+        app.logger.error(f"Comment error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
